@@ -1,0 +1,27 @@
+body { 
+    background-color: #F5F4F0; 
+    color: #44403c; 
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar { 
+    width: 6px; 
+}
+::-webkit-scrollbar-track { 
+    background: transparent; 
+}
+::-webkit-scrollbar-thumb { 
+    background: #e7e5e4; 
+    border-radius: 10px; 
+}
+::-webkit-scrollbar-thumb:hover { 
+    background: #d6d3d1; 
+}
+
+/* Transitions */
+.transition-width { 
+    transition: width 0.5s ease-out; 
+}
+.transition-height { 
+    transition: height 0.5s ease-out; 
+}
