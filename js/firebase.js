@@ -2,6 +2,8 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebas
 import {
     getAuth,
     signInWithPopup,
+    signInWithRedirect, // เพิ่ม
+    getRedirectResult,  // เพิ่ม
     GoogleAuthProvider,
     signOut,
     onAuthStateChanged,
@@ -13,19 +15,19 @@ import {
     doc,
     setDoc,
     getDoc,
-    collection
+    collection,
+    onSnapshot
 } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
 export default class FirebaseManager {
     constructor(onAuthChange) {
         // --- 1. CONFIGURATION ---
-        // เมื่อนำไปใช้จริง ให้ลบส่วนนี้และใส่ค่า config ของคุณเอง
         let firebaseConfig = {};
         if (typeof __firebase_config !== 'undefined') {
             firebaseConfig = JSON.parse(__firebase_config);
         } else {
-            // TODO: ใส่ค่า Config จาก Firebase Console ของคุณที่นี่
-            const firebaseConfig = {
+            // Default config (Fallback)
+            firebaseConfig = {
                 apiKey: "AIzaSyDxhzmc-IXsatiuGnkNfxrA_LoxdR5rHEE",
                 authDomain: "health-track-51fae.firebaseapp.com",
                 projectId: "health-track-51fae",
@@ -42,7 +44,7 @@ export default class FirebaseManager {
         this.db = getFirestore(this.app);
         this.provider = new GoogleAuthProvider();
 
-        // App ID สำหรับ Path (ใช้ default ถ้าไม่มี)
+        // App ID สำหรับ Path
         this.appId = typeof __app_id !== 'undefined' ? __app_id : 'health-dashboard-v1';
         this.user = null;
         this.onAuthChange = onAuthChange;
@@ -52,7 +54,7 @@ export default class FirebaseManager {
     }
 
     async initAuth() {
-        // ตรวจสอบ environment token (สำหรับ Canvas environment)
+        // A. ตรวจสอบ environment token (Custom Token)
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
             try {
                 await signInWithCustomToken(this.auth, __initial_auth_token);
@@ -61,6 +63,14 @@ export default class FirebaseManager {
             }
         }
 
+        // B. ตรวจสอบผลลัพธ์จากการ Redirect Login (กรณี Fallback ทำงาน)
+        try {
+            await getRedirectResult(this.auth);
+        } catch (error) {
+            console.error("Redirect login result error:", error);
+        }
+
+        // C. ฟังสถานะ Authentication
         onAuthStateChanged(this.auth, (user) => {
             this.user = user;
             if (this.onAuthChange) {
@@ -72,17 +82,29 @@ export default class FirebaseManager {
     // --- 4. AUTH ACTIONS ---
     async loginWithGoogle() {
         try {
+            // พยายาม Login ด้วย Popup ก่อน
             await signInWithPopup(this.auth, this.provider);
         } catch (error) {
-            console.error("Login failed:", error);
-            alert("เข้าสู่ระบบไม่สำเร็จ: " + error.message);
+            console.warn("Popup login failed, trying redirect...", error);
+            
+            // ดักจับ Error เรื่อง Domain เพื่อแจ้งเตือน
+            if (error.code === 'auth/unauthorized-domain') {
+                throw new Error("Domain ไม่ได้รับอนุญาต: กรุณาเพิ่ม 'localhost' หรือ '127.0.0.1' ใน Firebase Console -> Authentication -> Settings -> Authorized Domains");
+            }
+            
+            // Fallback: ถ้า Popup พัง (เช่นติด Cross-Origin Policy) ให้ใช้ Redirect แทน
+            try {
+                await signInWithRedirect(this.auth, this.provider);
+            } catch (redirectError) {
+                console.error("Redirect login failed:", redirectError);
+                throw redirectError;
+            }
         }
     }
 
     async logout() {
         try {
             await signOut(this.auth);
-            // Reload เพื่อเคลียร์ state
             window.location.reload();
         } catch (error) {
             console.error("Logout failed:", error);
@@ -90,17 +112,15 @@ export default class FirebaseManager {
     }
 
     // --- 5. FIRESTORE ACTIONS ---
-    // ใช้ Path ตามกฎ: artifacts/{appId}/users/{userId}/{collectionName}
+    // Path: artifacts/{appId}/users/{userId}/{collectionName}/main
 
     async saveData(collectionName, data) {
-        if (!this.user) return; // ไม่บันทึกถ้าไม่ได้ login
+        if (!this.user) return;
 
         try {
-            // ใช้ setDoc เพื่อบันทึกทับไฟล์เดิม (Single Document per user per feature)
-            // หรือจะใช้ addDoc ถ้าต้องการหลายรายการ (แต่ในที่นี้เราเก็บ state รวม)
             const docRef = doc(this.db, 'artifacts', this.appId, 'users', this.user.uid, collectionName, 'main');
-            await setDoc(docRef, { ...data, updatedAt: new Date() }, { merge: true });
-            console.log(`Saved ${collectionName}`);
+            // บันทึก timestamp เพื่อดูความเคลื่อนไหว
+            await setDoc(docRef, { ...data, updatedAt: new Date().toISOString() }, { merge: true });
         } catch (error) {
             console.error(`Error saving ${collectionName}:`, error);
         }
@@ -116,12 +136,25 @@ export default class FirebaseManager {
             if (docSnap.exists()) {
                 return docSnap.data();
             } else {
-                console.log(`No data for ${collectionName}`);
                 return null;
             }
         } catch (error) {
             console.error(`Error loading ${collectionName}:`, error);
             return null;
         }
+    }
+
+    // เพิ่มฟังก์ชัน Subscribe สำหรับ Real-time update
+    subscribe(collectionName, callback) {
+        if (!this.user) return () => { };
+
+        const docRef = doc(this.db, 'artifacts', this.appId, 'users', this.user.uid, collectionName, 'main');
+        return onSnapshot(docRef, (docSnap) => {
+            if (docSnap.exists()) {
+                callback(docSnap.data());
+            } else {
+                callback(null);
+            }
+        });
     }
 }

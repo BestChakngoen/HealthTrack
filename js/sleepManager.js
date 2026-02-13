@@ -1,11 +1,11 @@
 import Utils from './utils.js';
 
 export default class SleepManager {
-    constructor() {
+    constructor(firebaseManager) {
+        this.fb = firebaseManager;
         this.state = {
             bedTime: '22:00',
             wakeTime: '06:00',
-            // Empty history
             history: []
         };
         this.targets = {
@@ -14,10 +14,33 @@ export default class SleepManager {
             bedTime: '21:30',
             wakeTime: '05:30'
         };
-        // Removed initMockHistory()
+        
         this.cacheDOM();
         this.bindEvents();
-        this.render();
+        this.initData(); 
+    }
+
+    initData() {
+        this.fb.subscribe('sleep', (data) => {
+            if (data) {
+                // Merge data
+                this.state = { ...this.state, ...data };
+                
+                // Update Inputs
+                if(this.dom.bedTimeInput) this.dom.bedTimeInput.value = this.state.bedTime;
+                if(this.dom.wakeTimeInput) this.dom.wakeTimeInput.value = this.state.wakeTime;
+                
+                this.render();
+            } else {
+                // First time setup
+                this.saveData();
+                this.render();
+            }
+        });
+    }
+
+    saveData() {
+        this.fb.saveData('sleep', this.state);
     }
 
     cacheDOM() {
@@ -32,32 +55,29 @@ export default class SleepManager {
     }
 
     bindEvents() {
-        // Set initial values to inputs
         if(this.dom.bedTimeInput) this.dom.bedTimeInput.value = this.state.bedTime;
         if(this.dom.wakeTimeInput) this.dom.wakeTimeInput.value = this.state.wakeTime;
 
         if(this.dom.bedTimeInput) {
-            this.dom.bedTimeInput.addEventListener('input', (e) => {
+            this.dom.bedTimeInput.addEventListener('change', (e) => {
                 this.state.bedTime = e.target.value;
+                this.saveData(); 
                 this.render();
             });
         }
         if(this.dom.wakeTimeInput) {
-            this.dom.wakeTimeInput.addEventListener('input', (e) => {
+            this.dom.wakeTimeInput.addEventListener('change', (e) => {
                 this.state.wakeTime = e.target.value;
+                this.saveData();
                 this.render();
             });
         }
     }
 
-    // initMockHistory removed
-
     render() {
         const duration = Utils.calculateDuration(this.state.bedTime, this.state.wakeTime);
-        const targetAvg = (this.targets.min + this.targets.max) / 2;
-        const deviation = ((duration - targetAvg) / targetAvg) * 100;
+        const deviation = ((duration - 8.25) / 8.25) * 100; // Approx target avg
 
-        // Update Text & Circle
         if(this.dom.durationText) this.dom.durationText.innerText = duration.toFixed(1);
         
         if(this.dom.progressCircle) {
@@ -67,7 +87,6 @@ export default class SleepManager {
             this.dom.progressCircle.setAttribute('stroke', (duration >= this.targets.min && duration <= this.targets.max) ? "#7A8C7A" : "#BC7F75");
         }
 
-        // Update Deviations
         const bedTimeMins = Utils.getMinutes(this.state.bedTime) < 720 ? Utils.getMinutes(this.state.bedTime) + 1440 : Utils.getMinutes(this.state.bedTime);
         const targetBedMins = Utils.getMinutes(this.targets.bedTime);
         const scheduleDev = ((bedTimeMins - targetBedMins) / 60) * 100 / 4; 
@@ -85,7 +104,7 @@ export default class SleepManager {
     renderGraph(currentDuration) {
         if(!this.dom.patternChart) return;
 
-        const history = [...this.state.history, { 
+        const history = [...(this.state.history || []), { 
             day: 'วันนี้', 
             bedTime: this.state.bedTime, 
             wakeTime: this.state.wakeTime, 
@@ -102,12 +121,12 @@ export default class SleepManager {
 
         const targetBedY = timeToY(this.targets.bedTime);
         const targetWakeY = timeToY(this.targets.wakeTime);
-
-        const barsHTML = history.map((d, i) => {
+        
+        const barsHTML = history.slice(-7).map((d, i) => {
             const startY = timeToY(d.bedTime);
             const endY = timeToY(d.wakeTime);
             const height = endY - startY;
-            const isToday = i === history.length - 1;
+            const isToday = i === (history.length > 7 ? 6 : history.length - 1);
             return `
                 <div class="flex-1 h-full relative group">
                     <div class="absolute w-3 sm:w-4 rounded-full left-1/2 -translate-x-1/2 transition-all hover:w-5 hover:z-10 ${isToday ? 'bg-stone-700' : 'bg-stone-300'}"
@@ -121,7 +140,7 @@ export default class SleepManager {
         }).join('');
 
         this.dom.patternChart.innerHTML = `
-                <div class="flex justify-between items-center mb-4">
+            <div class="flex justify-between items-center mb-4">
                 <h4 class="text-xs uppercase tracking-wider text-stone-400 flex items-center gap-2">
                     <i data-lucide="history" class="w-3 h-3"></i> กราฟเวลาเข้านอน-ตื่นนอน
                 </h4>
@@ -132,5 +151,7 @@ export default class SleepManager {
                 ${barsHTML}
             </div>
         `;
+        
+        if (window.lucide) window.lucide.createIcons();
     }
 }

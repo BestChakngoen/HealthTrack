@@ -1,18 +1,39 @@
 export default class DietManager {
-    constructor() {
+    constructor(firebaseManager) {
+        this.fb = firebaseManager;
         this.state = {
             currentFoodType: 'meal',
             targetCalories: 2000,
-            foodLog: [
-                // Clean start, no default food items
-            ],
-            // Empty history
+            foodLog: [],
             history: []
         };
-        // Removed initMockHistory()
+        
         this.cacheDOM();
         this.bindEvents();
-        this.render();
+        this.initData();
+    }
+
+    initData() {
+        this.fb.subscribe('diet', (data) => {
+            if (data) {
+                // Keep UI state (currentFoodType) local, sync data
+                this.state.foodLog = data.foodLog || [];
+                this.state.history = data.history || [];
+                if(data.targetCalories) this.state.targetCalories = data.targetCalories;
+                this.render();
+            } else {
+                this.saveData();
+                this.render();
+            }
+        });
+    }
+
+    saveData() {
+        this.fb.saveData('diet', {
+            targetCalories: this.state.targetCalories,
+            foodLog: this.state.foodLog,
+            history: this.state.history
+        });
     }
 
     cacheDOM() {
@@ -27,7 +48,6 @@ export default class DietManager {
             },
             foodCount: document.getElementById('foodCount'),
             listContainer: document.getElementById('foodListContainer'),
-            // Progress DOM
             totalCalText: document.getElementById('totalCalToday'),
             calDeviationText: document.getElementById('calDeviationText'),
             mainProgress: document.getElementById('mainCalProgress'),
@@ -40,34 +60,29 @@ export default class DietManager {
         };
     }
 
-    // initMockHistory removed
-
     bindEvents() {
-        // Type buttons
         if(this.dom.btnTypes.meal) {
             Object.keys(this.dom.btnTypes).forEach(type => {
                 this.dom.btnTypes[type].addEventListener('click', () => this.setFoodType(type));
             });
         }
-
-        // Add button
         if(this.dom.btnAdd) this.dom.btnAdd.addEventListener('click', () => this.addFood());
-
-        // Delete Delegation
         if(this.dom.listContainer) {
             this.dom.listContainer.addEventListener('click', (e) => {
                 const btn = e.target.closest('button[data-action="delete"]');
                 if(btn) {
-                    const id = Number(btn.dataset.id);
-                    this.removeFood(id);
+                    this.removeFood(Number(btn.dataset.id));
                 }
             });
         }
     }
 
     setTarget(calories) {
-        this.state.targetCalories = calories;
-        this.renderProgress(); 
+        if (this.state.targetCalories !== calories) {
+            this.state.targetCalories = calories;
+            this.saveData();
+            this.renderProgress(); 
+        }
     }
 
     setFoodType(type) {
@@ -76,7 +91,7 @@ export default class DietManager {
             const btn = this.dom.btnTypes[t];
             if (t === type) {
                 btn.className = "flex-1 py-1 rounded text-[10px] font-medium transition-colors flex items-center justify-center gap-1 bg-stone-800 text-white shadow-sm";
-                btn.firstElementChild.classList.remove('text-stone-400');
+                if(btn.firstElementChild) btn.firstElementChild.classList.remove('text-stone-400');
             } else {
                 btn.className = "flex-1 py-1 rounded text-[10px] font-medium transition-colors flex items-center justify-center gap-1 text-stone-400 hover:bg-stone-100";
             }
@@ -97,11 +112,14 @@ export default class DietManager {
         this.state.foodLog.push(newItem);
         this.dom.foodName.value = '';
         this.dom.foodCal.value = '';
+        
+        this.saveData();
         this.render();
     }
 
     removeFood(id) {
         this.state.foodLog = this.state.foodLog.filter(x => x.id !== id);
+        this.saveData();
         this.render();
     }
 
@@ -115,7 +133,7 @@ export default class DietManager {
         this.dom.foodCount.innerText = `${this.state.foodLog.length} รายการ`;
 
         if (this.state.foodLog.length === 0) {
-            this.dom.listContainer.innerHTML = `
+             this.dom.listContainer.innerHTML = `
                 <div class="h-32 flex flex-col items-center justify-center text-stone-300 border-2 border-dashed border-stone-100 rounded-xl">
                     <i data-lucide="cookie" class="mb-2 opacity-50 w-6 h-6"></i>
                     <span class="text-xs">ยังไม่มีรายการอาหาร</span>
@@ -185,11 +203,11 @@ export default class DietManager {
     }
 
     renderWeeklyChart(todayTotal, m, d, s) {
-        const history = [...this.state.history, { day: 'วันนี้', total: todayTotal, meal: m, drink: d, snack: s }];
+        const history = [...(this.state.history || []), { day: 'วันนี้', total: todayTotal, meal: m, drink: d, snack: s }];
         const maxVal = Math.max(...history.map(x => x.total), this.state.targetCalories * 1.1) || 2000;
 
-        const barsHTML = history.map((d, i) => {
-            const isToday = i === history.length - 1;
+        const barsHTML = history.slice(-7).map((d, i) => {
+            const isToday = i === (history.length > 7 ? 6 : history.length - 1);
             const total = d.total || 1;
             return `
                 <div class="flex-1 flex flex-col items-center gap-1 z-10 group relative h-full justify-end">
